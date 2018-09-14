@@ -20,9 +20,10 @@ type serialFile struct {
 	stat              os.FileInfo
 	current           *File
 	handleHiddenFiles bool
+	resolveLinks      bool
 }
 
-func NewSerialFile(name, path string, hidden bool, stat os.FileInfo) (File, error) {
+func NewSerialFile(name, path string, hidden bool, stat os.FileInfo, resolveLinks bool) (File, error) {
 	switch mode := stat.Mode(); {
 	case mode.IsRegular():
 		file, err := os.Open(path)
@@ -37,12 +38,27 @@ func NewSerialFile(name, path string, hidden bool, stat os.FileInfo) (File, erro
 		if err != nil {
 			return nil, err
 		}
-		return &serialFile{name, path, contents, stat, nil, hidden}, nil
+		return &serialFile{name, path, contents, stat, nil, hidden, resolveLinks}, nil
 	case mode&os.ModeSymlink != 0:
 		target, err := os.Readlink(path)
 		if err != nil {
 			return nil, err
 		}
+		if resolveLinks {
+			target, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				return nil, err
+			}
+			target = filepath.ToSlash(target)
+
+			fi, err := os.Lstat(target)
+			if err != nil {
+				return nil, err
+			}
+
+			return NewSerialFile(name, target, hidden, fi, resolveLinks)
+		}
+
 		return NewLinkFile(name, path, target, stat), nil
 	default:
 		return nil, fmt.Errorf("Unrecognized file type for %s: %s", name, mode.String())
@@ -93,7 +109,7 @@ func (f *serialFile) NextFile() (File, error) {
 	// recursively call the constructor on the next file
 	// if it's a regular file, we will open it as a ReaderFile
 	// if it's a directory, files in it will be opened serially
-	sf, err := NewSerialFile(fileName, filePath, f.handleHiddenFiles, stat)
+	sf, err := NewSerialFile(fileName, filePath, f.handleHiddenFiles, stat, f.resolveLinks)
 	if err != nil {
 		return nil, err
 	}
@@ -139,13 +155,24 @@ func (f *serialFile) Size() (int64, error) {
 
 	var du int64
 	err := filepath.Walk(f.FullPath(), func(p string, fi os.FileInfo, err error) error {
-		if err != nil {
+		if err != nil || fi == nil {
 			return err
 		}
 
-		if fi != nil && fi.Mode().IsRegular() {
+		if fi.Mode().IsRegular() {
 			du += fi.Size()
 		}
+
+		if fi.Mode()&os.ModeSymlink != 0 {
+			if f.resolveLinks {
+				targetFi, err := os.Stat(p)
+				if err != nil {
+					return err
+				}
+				du += targetFi.Size()
+			}
+		}
+
 		return nil
 	})
 
