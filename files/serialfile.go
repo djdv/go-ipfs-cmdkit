@@ -22,7 +22,7 @@ type serialFile struct {
 	handleHiddenFiles bool
 }
 
-func NewSerialFile(name, path string, hidden bool, stat os.FileInfo) (File, error) {
+func NewSerialFile(name, path string, hidden bool, stat os.FileInfo, resolveDepth int) (File, error) {
 	switch mode := stat.Mode(); {
 	case mode.IsRegular():
 		file, err := os.Open(path)
@@ -43,7 +43,7 @@ func NewSerialFile(name, path string, hidden bool, stat os.FileInfo) (File, erro
 		if err != nil {
 			return nil, err
 		}
-		return NewLinkFile(name, path, target, stat), nil
+		return NewLinkFile(name, path, target, stat, resolveDepth), nil
 	default:
 		return nil, fmt.Errorf("Unrecognized file type for %s: %s", name, mode.String())
 	}
@@ -93,7 +93,7 @@ func (f *serialFile) NextFile() (File, error) {
 	// recursively call the constructor on the next file
 	// if it's a regular file, we will open it as a ReaderFile
 	// if it's a directory, files in it will be opened serially
-	sf, err := NewSerialFile(fileName, filePath, f.handleHiddenFiles, stat)
+	sf, err := NewSerialFile(fileName, filePath, f.handleHiddenFiles, stat, 0)
 	if err != nil {
 		return nil, err
 	}
