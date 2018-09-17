@@ -78,15 +78,15 @@ func recursiveLinkWalk(size *int64, depthLimit int) filepath.WalkFunc {
 			return nil
 		}
 
-		//conditionally recurs symlinks
 		if fi.Mode()&os.ModeSymlink != 0 {
-			if depth < depthLimit {
+
+			if depth <= depthLimit {
 				target, err := filepath.EvalSymlinks(p)
 				if err != nil {
 					return err
 				}
 
-				err = filepath.Walk(target, recursiveLinkWalk(size, 1))
+				err = filepath.Walk(target, recursiveLinkWalk(size, depthLimit-depth))
 				if err != nil {
 					return err
 				}
