@@ -20,9 +20,10 @@ type serialFile struct {
 	stat              os.FileInfo
 	current           *File
 	handleHiddenFiles bool
+	resolveLimit      int
 }
 
-func NewSerialFile(name, path string, hidden bool, stat os.FileInfo, resolveDepth int) (File, error) {
+func NewSerialFile(name, path string, hidden bool, stat os.FileInfo, resolveLimit int) (File, error) {
 	switch mode := stat.Mode(); {
 	case mode.IsRegular():
 		file, err := os.Open(path)
@@ -37,13 +38,28 @@ func NewSerialFile(name, path string, hidden bool, stat os.FileInfo, resolveDept
 		if err != nil {
 			return nil, err
 		}
-		return &serialFile{name, path, contents, stat, nil, hidden}, nil
+		return &serialFile{name, path, contents, stat, nil, hidden, resolveLimit}, nil
 	case mode&os.ModeSymlink != 0:
 		target, err := os.Readlink(path)
 		if err != nil {
 			return nil, err
 		}
-		return NewLinkFile(name, path, target, stat, resolveDepth), nil
+
+		if shouldResolve(name, resolveLimit) {
+			target, err := resolveLink(path)
+			if err != nil {
+				return nil, err
+			}
+
+			fi, err := os.Lstat(target)
+			if err != nil {
+				return nil, err
+			}
+
+			return NewSerialFile(name, target, hidden, fi, resolveLimit)
+		}
+
+		return NewLinkFile(name, path, target, stat), nil
 	default:
 		return nil, fmt.Errorf("Unrecognized file type for %s: %s", name, mode.String())
 	}
@@ -93,7 +109,7 @@ func (f *serialFile) NextFile() (File, error) {
 	// recursively call the constructor on the next file
 	// if it's a regular file, we will open it as a ReaderFile
 	// if it's a directory, files in it will be opened serially
-	sf, err := NewSerialFile(fileName, filePath, f.handleHiddenFiles, stat, 0)
+	sf, err := NewSerialFile(fileName, filePath, f.handleHiddenFiles, stat, f.resolveLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -143,9 +159,24 @@ func (f *serialFile) Size() (int64, error) {
 			return err
 		}
 
-		if fi != nil && fi.Mode().IsRegular() {
+		if fi == nil {
+			return nil
+		}
+
+		if fi.Mode().IsRegular() {
 			du += fi.Size()
 		}
+
+		if fi.Mode()&os.ModeSymlink != 0 {
+			if shouldResolve(filepath.ToSlash(p), f.resolveLimit) {
+				fi, err := os.Stat(p)
+				if err != nil {
+					return err
+				}
+				du += fi.Size()
+			}
+		}
+
 		return nil
 	})
 
